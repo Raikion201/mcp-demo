@@ -1,0 +1,23 @@
+{
+  "name": "todo_create",
+  "description": "Create a new todo item",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "Todo title (required)"
+      },
+      "description": {
+        "type": "string",
+        "description": "Todo description (optional)"
+      }
+    },
+    "required": ["title"]
+  }
+}
+
+
+
+
+

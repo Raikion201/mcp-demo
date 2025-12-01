@@ -1,0 +1,31 @@
+{
+  "name": "todo_update",
+  "description": "Update an existing todo item",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Todo ID (required)"
+      },
+      "title": {
+        "type": "string",
+        "description": "New title (optional)"
+      },
+      "description": {
+        "type": "string",
+        "description": "New description (optional)"
+      },
+      "completed": {
+        "type": "boolean",
+        "description": "Completion status (optional)"
+      }
+    },
+    "required": ["id"]
+  }
+}
+
+
+
+
+
