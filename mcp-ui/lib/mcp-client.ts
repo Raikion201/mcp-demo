@@ -1,4 +1,4 @@
-// MCP Client for communicating with the MCP Todo Server
+// MCP Client for communicating with the MCP Todo Server using MCP-UI
 
 const MCP_SERVER_URL = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'http://localhost:3001/mcp';
 
@@ -11,36 +11,71 @@ export interface Todo {
   updatedAt: string;
 }
 
+// Resource type matching MCP SDK's EmbeddedResource['resource']
+export interface MCPResource {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
+}
+
 interface MCPRequest {
   jsonrpc: '2.0';
   id: number | string;
   method: string;
-  params?: any;
+  params?: Record<string, unknown>;
 }
 
 interface MCPResponse {
   jsonrpc: '2.0';
   id: number | string;
-  result?: any;
+  result?: {
+    content?: Array<{
+      type: string;
+      text?: string;
+      resource?: MCPResource;
+      uri?: string;
+      mimeType?: string;
+      blob?: string;
+    }>;
+    tools?: Array<{
+      name: string;
+      description: string;
+      inputSchema: Record<string, unknown>;
+    }>;
+  };
   error?: {
     code: number;
     message: string;
-    data?: any;
+    data?: unknown;
   };
 }
 
 class MCPClient {
   private requestId = 0;
+  private sessionId: string | null = null;
 
   private async sendRequest(request: MCPRequest): Promise<MCPResponse> {
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      if (this.sessionId) {
+        headers['mcp-session-id'] = this.sessionId;
+      }
+
       const response = await fetch(MCP_SERVER_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(request),
       });
+
+      // Capture session ID from response
+      const newSessionId = response.headers.get('mcp-session-id');
+      if (newSessionId) {
+        this.sessionId = newSessionId;
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -59,6 +94,22 @@ class MCPClient {
     }
   }
 
+  async initialize(): Promise<void> {
+    await this.sendRequest({
+      jsonrpc: '2.0',
+      id: ++this.requestId,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        clientInfo: {
+          name: 'mcp-ui-client',
+          version: '2.0.0',
+        },
+        capabilities: {},
+      },
+    });
+  }
+
   async listTools() {
     const response = await this.sendRequest({
       jsonrpc: '2.0',
@@ -69,22 +120,58 @@ class MCPClient {
     return response.result?.tools || [];
   }
 
-  async createTodo(title: string, description?: string): Promise<Todo> {
+  async getTodoUI(): Promise<{
+    resource: MCPResource;
+    textContent?: string;
+  }> {
+    const response = await this.sendRequest({
+      jsonrpc: '2.0',
+      id: ++this.requestId,
+      method: 'tools/call',
+      params: {
+        name: 'todo_ui',
+        arguments: {},
+      },
+    });
+
+    const content = response.result?.content || [];
+    
+    // Find the UI resource in the response
+    const uiContent = content.find(c => c.type === 'resource' && c.resource);
+    const textContent = content.find(c => c.type === 'text')?.text;
+
+    if (uiContent && uiContent.resource) {
+      return {
+        resource: uiContent.resource,
+        textContent,
+      };
+    }
+
+    throw new Error('No UI resource in response');
+  }
+
+  async createTodo(title: string, description?: string): Promise<{
+    todo: Todo;
+    resource?: MCPResource;
+  }> {
     const response = await this.sendRequest({
       jsonrpc: '2.0',
       id: ++this.requestId,
       method: 'tools/call',
       params: {
         name: 'todo_create',
-        arguments: {
-          title,
-          description,
-        },
+        arguments: { title, description },
       },
     });
 
-    const content = response.result?.content?.[0]?.text;
-    return JSON.parse(content);
+    const content = response.result?.content || [];
+    const textContent = content.find(c => c.type === 'text')?.text;
+    const uiContent = content.find(c => c.type === 'resource' && c.resource);
+
+    return {
+      todo: textContent ? JSON.parse(textContent) : null,
+      resource: uiContent?.resource,
+    };
   }
 
   async listTodos(completed?: boolean): Promise<Todo[]> {
@@ -98,33 +185,44 @@ class MCPClient {
       },
     });
 
-    const content = response.result?.content?.[0]?.text;
-    return JSON.parse(content);
+    const content = response.result?.content || [];
+    const textContent = content.find(c => c.type === 'text')?.text;
+    
+    return textContent ? JSON.parse(textContent) : [];
   }
 
   async updateTodo(
     id: string,
     updates: { title?: string; description?: string; completed?: boolean }
-  ): Promise<Todo> {
+  ): Promise<{
+    todo: Todo;
+    resource?: MCPResource;
+  }> {
     const response = await this.sendRequest({
       jsonrpc: '2.0',
       id: ++this.requestId,
       method: 'tools/call',
       params: {
         name: 'todo_update',
-        arguments: {
-          id,
-          ...updates,
-        },
+        arguments: { id, ...updates },
       },
     });
 
-    const content = response.result?.content?.[0]?.text;
-    return JSON.parse(content);
+    const content = response.result?.content || [];
+    const textContent = content.find(c => c.type === 'text')?.text;
+    const uiContent = content.find(c => c.type === 'resource' && c.resource);
+
+    return {
+      todo: textContent ? JSON.parse(textContent) : null,
+      resource: uiContent?.resource,
+    };
   }
 
-  async deleteTodo(id: string): Promise<void> {
-    await this.sendRequest({
+  async deleteTodo(id: string): Promise<{
+    message: string;
+    resource?: MCPResource;
+  }> {
+    const response = await this.sendRequest({
       jsonrpc: '2.0',
       id: ++this.requestId,
       method: 'tools/call',
@@ -133,9 +231,16 @@ class MCPClient {
         arguments: { id },
       },
     });
+
+    const content = response.result?.content || [];
+    const textContent = content.find(c => c.type === 'text')?.text;
+    const uiContent = content.find(c => c.type === 'resource' && c.resource);
+
+    return {
+      message: textContent || 'Deleted',
+      resource: uiContent?.resource,
+    };
   }
 }
 
 export const mcpClient = new MCPClient();
-
-

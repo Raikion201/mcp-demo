@@ -1,77 +1,111 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { mcpClient, Todo } from '@/lib/mcp-client';
-import TodoForm from '@/components/TodoForm';
-import TodoList from '@/components/TodoList';
+import { useEffect, useState, useCallback } from 'react';
+import { UIResourceRenderer, UIActionResult } from '@mcp-ui/client';
+import { mcpClient, MCPResource } from '@/lib/mcp-client';
 
 export default function Home() {
-  const [todos, setTodos] = useState<Todo[]>([]);
+  const [resource, setResource] = useState<MCPResource | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadTodos = async () => {
+  const loadTodoUI = useCallback(async () => {
     try {
       setError(null);
-      const fetchedTodos = await mcpClient.listTodos();
-      setTodos(fetchedTodos);
+      setIsLoading(true);
+      
+      // Initialize connection and get the Todo UI
+      await mcpClient.initialize();
+      const { resource: uiResource } = await mcpClient.getTodoUI();
+      setResource(uiResource);
     } catch (err) {
-      console.error('Failed to load todos:', err);
+      console.error('Failed to load Todo UI:', err);
       setError('Failed to connect to MCP server. Make sure it\'s running on http://localhost:3001');
     } finally {
       setIsLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadTodos();
   }, []);
 
-  const handleAddTodo = async (title: string, description: string) => {
-    const newTodo = await mcpClient.createTodo(title, description);
-    setTodos([newTodo, ...todos]);
-  };
+  useEffect(() => {
+    loadTodoUI();
+  }, [loadTodoUI]);
 
-  const handleUpdateTodo = async (
-    id: string,
-    updates: { title?: string; description?: string; completed?: boolean }
-  ) => {
-    const updatedTodo = await mcpClient.updateTodo(id, updates);
-    setTodos(todos.map((todo) => (todo.id === id ? updatedTodo : todo)));
-  };
-
-  const handleDeleteTodo = async (id: string) => {
-    await mcpClient.deleteTodo(id);
-    setTodos(todos.filter((todo) => todo.id !== id));
-  };
-
-  const stats = {
-    total: todos.length,
-    active: todos.filter(t => !t.completed).length,
-    completed: todos.filter(t => t.completed).length,
-  };
+  // Handle UI actions from the embedded iframe
+  const handleUIAction = useCallback(async (action: UIActionResult): Promise<{ status: string }> => {
+    console.log('UI Action received:', action);
+    
+    try {
+      // Handle intent actions from the embedded UI
+      if (action.type === 'intent' && action.payload) {
+        const { intent, params } = action.payload as { intent: string; params: Record<string, unknown> };
+        
+        switch (intent) {
+          case 'todo_create': {
+            const { title, description } = params as { title: string; description?: string };
+            const result = await mcpClient.createTodo(title, description);
+            if (result.resource) {
+              setResource(result.resource);
+            }
+            break;
+          }
+          
+          case 'todo_update': {
+            const { id, ...updates } = params as { 
+              id: string; 
+              title?: string; 
+              description?: string; 
+              completed?: boolean 
+            };
+            const result = await mcpClient.updateTodo(id, updates);
+            if (result.resource) {
+              setResource(result.resource);
+            }
+            break;
+          }
+          
+          case 'todo_delete': {
+            const { id } = params as { id: string };
+            const result = await mcpClient.deleteTodo(id);
+            if (result.resource) {
+              setResource(result.resource);
+            }
+            break;
+          }
+        }
+      }
+      
+      return { status: 'handled' };
+    } catch (err) {
+      console.error('Action failed:', err);
+      return { status: 'error' };
+    }
+  }, []);
 
   return (
-    <div className="min-h-screen bg-white flex justify-center">
-      <div className="w-full px-4 py-8 max-w-3xl">
-        {/* Header */}
-        <header className="border-b border-gray-200 pb-6 mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-1">
-                Today
-              </h1>
-              <p className="text-sm text-gray-500">
-                {stats.active} {stats.active === 1 ? 'task' : 'tasks'}
-              </p>
+    <div className="app-container">
+      <div className="app-wrapper">
+        {/* Cyberpunk Header */}
+        <header className="app-header">
+          <div className="header-content">
+            <div className="logo-section">
+              <div className="logo-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  <path d="M9 12l2 2 4-4" />
+                </svg>
+              </div>
+              <div>
+                <h1 className="app-title">MCP-UI Todo</h1>
+                <p className="app-subtitle">Interactive UI via Model Context Protocol</p>
+              </div>
             </div>
             <button
-              onClick={loadTodos}
+              onClick={loadTodoUI}
               disabled={isLoading}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors disabled:cursor-not-allowed"
+              className="refresh-btn"
             >
-              <svg className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              <svg className={isLoading ? 'spinning' : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
           </div>
@@ -79,17 +113,15 @@ export default function Home() {
 
         {/* Error Message */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <div className="flex items-start gap-3">
-              <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <div className="error-container">
+            <div className="error-content">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v4m0 4h.01" />
               </svg>
-              <div className="flex-1">
-                <p className="text-sm text-red-700">{error}</p>
-                <button
-                  onClick={loadTodos}
-                  className="mt-1 text-sm text-red-600 hover:underline"
-                >
+              <div>
+                <p className="error-text">{error}</p>
+                <button onClick={loadTodoUI} className="retry-btn">
                   Try again
                 </button>
               </div>
@@ -98,33 +130,266 @@ export default function Home() {
         )}
 
         {/* Main Content */}
-        <div>
-          {/* Add Todo Form */}
-          <div className="mb-6">
-            <TodoForm onAdd={handleAddTodo} />
-          </div>
-
-          {/* Todo List */}
-          <div>
-            {isLoading ? (
-              <div className="text-center py-12">
-                <div className="inline-block w-8 h-8 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin mb-4"></div>
-                <p className="text-sm text-gray-500">Loading...</p>
-              </div>
-            ) : (
-              <TodoList
-                todos={todos}
-                onUpdate={handleUpdateTodo}
-                onDelete={handleDeleteTodo}
+        <main className="main-content">
+          {isLoading ? (
+            <div className="loading-container">
+              <div className="loader"></div>
+              <p className="loading-text">Loading MCP-UI...</p>
+            </div>
+          ) : resource ? (
+            <div className="ui-renderer-container">
+              <UIResourceRenderer
+                resource={resource}
+                onUIAction={handleUIAction}
+                htmlProps={{
+                  autoResizeIframe: true,
+                  style: {
+                    width: '100%',
+                    minHeight: '600px',
+                    border: 'none',
+                    borderRadius: '16px',
+                    background: 'transparent',
+                  },
+                }}
               />
-            )}
-          </div>
-        </div>
+            </div>
+          ) : !error ? (
+            <div className="empty-state">
+              <p>No UI resource available</p>
+            </div>
+          ) : null}
+        </main>
 
         {/* Footer */}
-        <footer className="mt-12 pt-6 border-t border-gray-200 text-center">
+        <footer className="app-footer">
+          <div className="footer-content">
+            <span className="footer-badge">MCP-UI</span>
+            <span className="footer-divider">•</span>
+            <span>Powered by Model Context Protocol</span>
+          </div>
         </footer>
       </div>
+
+      <style jsx>{`
+        .app-container {
+          min-height: 100vh;
+          background: linear-gradient(135deg, #0a0a0f 0%, #0f0f1a 50%, #0a0f1a 100%);
+          display: flex;
+          justify-content: center;
+          padding: 20px;
+        }
+
+        .app-wrapper {
+          width: 100%;
+          max-width: 800px;
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+        }
+
+        .app-header {
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 16px;
+          padding: 20px 24px;
+          backdrop-filter: blur(10px);
+        }
+
+        .header-content {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+
+        .logo-section {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+        }
+
+        .logo-icon {
+          width: 48px;
+          height: 48px;
+          background: linear-gradient(135deg, #00d9ff 0%, #00b4d8 100%);
+          border-radius: 12px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 0 20px rgba(0, 217, 255, 0.3);
+        }
+
+        .logo-icon svg {
+          width: 28px;
+          height: 28px;
+          color: #0f0f23;
+        }
+
+        .app-title {
+          font-size: 1.5rem;
+          font-weight: 600;
+          color: #ffffff;
+          letter-spacing: 0.5px;
+          margin: 0;
+        }
+
+        .app-subtitle {
+          font-size: 0.85rem;
+          color: #666;
+          margin: 4px 0 0 0;
+        }
+
+        .refresh-btn {
+          width: 44px;
+          height: 44px;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 10px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+          background: rgba(0, 217, 255, 0.1);
+          border-color: rgba(0, 217, 255, 0.3);
+        }
+
+        .refresh-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .refresh-btn svg {
+          width: 20px;
+          height: 20px;
+          color: #888;
+        }
+
+        .refresh-btn:hover svg {
+          color: #00d9ff;
+        }
+
+        .spinning {
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+
+        .error-container {
+          background: rgba(255, 107, 107, 0.1);
+          border: 1px solid rgba(255, 107, 107, 0.3);
+          border-radius: 12px;
+          padding: 16px 20px;
+        }
+
+        .error-content {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+        }
+
+        .error-content svg {
+          width: 20px;
+          height: 20px;
+          color: #ff6b6b;
+          flex-shrink: 0;
+          margin-top: 2px;
+        }
+
+        .error-text {
+          color: #ff8a8a;
+          font-size: 0.9rem;
+          margin: 0;
+        }
+
+        .retry-btn {
+          background: none;
+          border: none;
+          color: #ff6b6b;
+          font-size: 0.85rem;
+          cursor: pointer;
+          padding: 0;
+          margin-top: 8px;
+          text-decoration: underline;
+        }
+
+        .retry-btn:hover {
+          color: #ff8a8a;
+        }
+
+        .main-content {
+          flex: 1;
+        }
+
+        .loading-container {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 80px 20px;
+        }
+
+        .loader {
+          width: 48px;
+          height: 48px;
+          border: 3px solid rgba(0, 217, 255, 0.1);
+          border-top-color: #00d9ff;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+
+        .loading-text {
+          color: #666;
+          margin-top: 16px;
+          font-size: 0.9rem;
+        }
+
+        .ui-renderer-container {
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 16px;
+          overflow: hidden;
+        }
+
+        .empty-state {
+          text-align: center;
+          padding: 80px 20px;
+          color: #666;
+        }
+
+        .app-footer {
+          text-align: center;
+          padding: 16px;
+        }
+
+        .footer-content {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          font-size: 0.8rem;
+          color: #555;
+        }
+
+        .footer-badge {
+          background: linear-gradient(135deg, #00d9ff 0%, #00b4d8 100%);
+          color: #0f0f23;
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-weight: 600;
+          font-size: 0.7rem;
+          letter-spacing: 0.5px;
+        }
+
+        .footer-divider {
+          opacity: 0.3;
+        }
+      `}</style>
     </div>
   );
 }
