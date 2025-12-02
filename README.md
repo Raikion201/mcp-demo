@@ -30,7 +30,7 @@ A modern MCP (Model Context Protocol) Todo application demonstrating **MCP-UI** 
 ```bash
 cd mcp-server
 npm install
-npm run dev:http
+npm run dev
 ```
 
 Server runs at `http://localhost:3001/mcp`
