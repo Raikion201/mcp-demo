@@ -50,7 +50,8 @@ npm install
 
 ```bash
 cd mcp-server
-npm run dev:http
+npm install
+npm run dev
 ```
 
 The server will start at `http://localhost:3001/mcp`
