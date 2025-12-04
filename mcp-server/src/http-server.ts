@@ -4,6 +4,7 @@ import cors from 'cors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import { createUIResource } from '@mcp-ui/server';
 import { todoStorage, Todo } from './core/storage.js';
 import { randomUUID } from 'crypto';
@@ -333,6 +334,39 @@ function generateTodoListHTML(todos: Todo[]): string {
     .completed-section {
       opacity: 0.7;
     }
+    
+    /* Inline Edit Form */
+    .edit-form {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .edit-input {
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #fff;
+      font-size: 0.95rem;
+    }
+    
+    .edit-input:focus {
+      outline: none;
+      border-color: #00d9ff;
+    }
+    
+    .edit-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    
+    .btn-small {
+      padding: 8px 16px;
+      font-size: 0.85rem;
+    }
   </style>
 </head>
 <body>
@@ -456,30 +490,66 @@ function generateTodoListHTML(todos: Todo[]): string {
     }
     
     function deleteTodo(id) {
-      if (confirm('Delete this task?')) {
-        sendAction('todo_delete', { id });
+      // Delete directly without confirm (blocked in sandbox)
+      const item = document.querySelector('.todo-item[data-id="' + id + '"]');
+      if (item) {
+        item.style.opacity = '0.5';
+        item.style.pointerEvents = 'none';
       }
+      sendAction('todo_delete', { id });
     }
     
     function editTodo(id) {
       const item = document.querySelector('.todo-item[data-id="' + id + '"]');
       const titleEl = item.querySelector('.todo-title');
       const descEl = item.querySelector('.todo-description');
+      const contentEl = item.querySelector('.todo-content');
+      const actionsEl = item.querySelector('.todo-actions');
       
       const currentTitle = titleEl.textContent;
       const currentDesc = descEl ? descEl.textContent : '';
       
-      const newTitle = prompt('Edit title:', currentTitle);
-      if (newTitle === null) return;
+      // Hide current content and show edit form
+      contentEl.style.display = 'none';
+      actionsEl.style.display = 'none';
       
-      const newDesc = prompt('Edit description:', currentDesc);
-      if (newDesc === null) return;
+      // Create inline edit form
+      const editForm = document.createElement('div');
+      editForm.className = 'edit-form';
+      editForm.innerHTML = \`
+        <input type="text" class="edit-input" id="edit-title-\${id}" value="\${currentTitle.replace(/"/g, '&quot;')}" placeholder="Title" />
+        <input type="text" class="edit-input" id="edit-desc-\${id}" value="\${currentDesc.replace(/"/g, '&quot;')}" placeholder="Description (optional)" />
+        <div class="edit-buttons">
+          <button class="btn btn-small" onclick="saveEdit('\${id}')">Save</button>
+          <button class="btn btn-small btn-secondary" onclick="cancelEdit('\${id}')">Cancel</button>
+        </div>
+      \`;
+      item.appendChild(editForm);
+      document.getElementById('edit-title-' + id).focus();
+    }
+    
+    function saveEdit(id) {
+      const newTitle = document.getElementById('edit-title-' + id).value.trim();
+      const newDesc = document.getElementById('edit-desc-' + id).value.trim();
+      
+      if (!newTitle) return;
       
       sendAction('todo_update', { 
         id, 
-        title: newTitle.trim() || currentTitle,
-        description: newDesc.trim()
+        title: newTitle,
+        description: newDesc
       });
+    }
+    
+    function cancelEdit(id) {
+      const item = document.querySelector('.todo-item[data-id="' + id + '"]');
+      const editForm = item.querySelector('.edit-form');
+      const contentEl = item.querySelector('.todo-content');
+      const actionsEl = item.querySelector('.todo-actions');
+      
+      if (editForm) editForm.remove();
+      contentEl.style.display = '';
+      actionsEl.style.display = '';
     }
     
     // Handle Enter key in title input
@@ -526,11 +596,10 @@ function createMCPServer(): McpServer {
   });
 
   // Register todo_ui tool
-  server.registerTool(
+  server.tool(
     'todo_ui',
-    {
-      description: 'Display the interactive Todo application UI. Returns a UIResource that renders the full todo list with create, update, and delete capabilities.',
-    },
+    'Display the interactive Todo application UI. Returns a UIResource that renders the full todo list with create, update, and delete capabilities.',
+    {},
     async () => {
       const todos = todoStorage.getAll();
       const htmlContent = generateTodoListHTML(todos);
@@ -548,14 +617,15 @@ function createMCPServer(): McpServer {
   );
 
   // Register todo_create tool
-  server.registerTool(
+  server.tool(
     'todo_create',
+    'Create a new todo item with title and optional description',
     {
-      description: 'Create a new todo item with title and optional description',
+      title: z.string().describe('The title of the todo item'),
+      description: z.string().optional().describe('Optional description for the todo'),
     },
-    async (args: any) => {
-      console.log('📝 todo_create called with args:', JSON.stringify(args));
-      const { title, description } = args as { title: string; description?: string };
+    async ({ title, description }) => {
+      console.log('📝 todo_create called with:', { title, description });
       
       if (!title || title.trim().length === 0) {
         throw new Error('Title is required');
@@ -590,13 +660,13 @@ function createMCPServer(): McpServer {
   );
 
   // Register todo_list tool
-  server.registerTool(
+  server.tool(
     'todo_list',
+    'List all todos, optionally filter by completion status',
     {
-      description: 'List all todos, optionally filter by completion status',
+      completed: z.boolean().optional().describe('Filter by completion status'),
     },
-    async (args: any) => {
-      const { completed } = (args as { completed?: boolean }) || {};
+    async ({ completed }) => {
       let todos = todoStorage.getAll();
       
       if (completed !== undefined) {
@@ -612,18 +682,16 @@ function createMCPServer(): McpServer {
   );
 
   // Register todo_update tool
-  server.registerTool(
+  server.tool(
     'todo_update',
+    'Update a todo item by ID with new title, description, or completion status',
     {
-      description: 'Update a todo item by ID with new title, description, or completion status',
+      id: z.string().describe('The ID of the todo to update'),
+      title: z.string().optional().describe('New title for the todo'),
+      description: z.string().optional().describe('New description for the todo'),
+      completed: z.boolean().optional().describe('Mark todo as completed or not'),
     },
-    async (args: any) => {
-      const { id: todoId, title, description, completed } = args as {
-        id: string;
-        title?: string;
-        description?: string;
-        completed?: boolean;
-      };
+    async ({ id: todoId, title, description, completed }) => {
 
       const updates: Partial<Todo> = {};
       if (title !== undefined) updates.title = title.trim();
@@ -654,13 +722,13 @@ function createMCPServer(): McpServer {
   );
 
   // Register todo_delete tool
-  server.registerTool(
+  server.tool(
     'todo_delete',
+    'Delete a todo item by ID',
     {
-      description: 'Delete a todo item by ID',
+      id: z.string().describe('The ID of the todo to delete'),
     },
-    async (args: any) => {
-      const { id: todoId } = args as { id: string };
+    async ({ id: todoId }) => {
       const deleted = todoStorage.delete(todoId);
       
       if (!deleted) {
@@ -760,6 +828,130 @@ app.get('/mcp', handleSessionRequest);
 
 // DELETE handles explicit session termination from the client
 app.delete('/mcp', handleSessionRequest);
+
+// ============================================
+// Simple REST API for Web Frontend
+// ============================================
+
+// Helper to execute tools directly
+const executeToolDirect = async (toolName: string, args: Record<string, unknown>) => {
+  switch (toolName) {
+    case 'todo_ui': {
+      const todos = todoStorage.getAll();
+      const htmlContent = generateTodoListHTML(todos);
+      const uiResource = createUIResource({
+        uri: 'ui://todo-app/main',
+        content: { type: 'rawHtml', htmlString: htmlContent },
+        encoding: 'text',
+      });
+      return { content: [uiResource] };
+    }
+    case 'todo_create': {
+      const { title, description } = args as { title: string; description?: string };
+      if (!title?.trim()) throw new Error('Title is required');
+      const newTodo = {
+        id: randomUUID(),
+        title: title.trim(),
+        description: (description as string)?.trim() || '',
+        completed: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const created = todoStorage.create(newTodo);
+      const todos = todoStorage.getAll();
+      const uiResource = createUIResource({
+        uri: 'ui://todo-app/main',
+        content: { type: 'rawHtml', htmlString: generateTodoListHTML(todos) },
+        encoding: 'text',
+      });
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify(created, null, 2) },
+          uiResource,
+        ],
+      };
+    }
+    case 'todo_list': {
+      const { completed } = args as { completed?: boolean };
+      let todos = todoStorage.getAll();
+      if (completed !== undefined) {
+        todos = todos.filter(t => t.completed === completed);
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(todos, null, 2) }] };
+    }
+    case 'todo_update': {
+      const { id, title, description, completed } = args as {
+        id: string; title?: string; description?: string; completed?: boolean;
+      };
+      const updates: Partial<Todo> = {};
+      if (title !== undefined) updates.title = title.trim();
+      if (description !== undefined) updates.description = description.trim();
+      if (completed !== undefined) updates.completed = completed;
+      const updated = todoStorage.update(id, updates);
+      if (!updated) throw new Error(`Todo not found: ${id}`);
+      const todos = todoStorage.getAll();
+      const uiResource = createUIResource({
+        uri: 'ui://todo-app/main',
+        content: { type: 'rawHtml', htmlString: generateTodoListHTML(todos) },
+        encoding: 'text',
+      });
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify(updated, null, 2) },
+          uiResource,
+        ],
+      };
+    }
+    case 'todo_delete': {
+      const { id } = args as { id: string };
+      const deleted = todoStorage.delete(id);
+      if (!deleted) throw new Error(`Todo not found: ${id}`);
+      const todos = todoStorage.getAll();
+      const uiResource = createUIResource({
+        uri: 'ui://todo-app/main',
+        content: { type: 'rawHtml', htmlString: generateTodoListHTML(todos) },
+        encoding: 'text',
+      });
+      return {
+        content: [
+          { type: 'text', text: `Todo ${id} deleted` },
+          uiResource,
+        ],
+      };
+    }
+    default:
+      throw new Error(`Unknown tool: ${toolName}`);
+  }
+};
+
+// REST API endpoint for tool execution
+app.post('/api/tools/:toolName', async (req, res) => {
+  try {
+    const { toolName } = req.params;
+    const args = req.body || {};
+    console.log(`🔧 API Tool Call: ${toolName}`, args);
+    
+    const result = await executeToolDirect(toolName, args);
+    console.log(`✅ Tool ${toolName} executed successfully`);
+    res.json(result);
+  } catch (error: any) {
+    console.error(`❌ Tool error:`, error.message);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// List available tools
+app.get('/api/tools', (req, res) => {
+  res.json({
+    tools: [
+      { name: 'todo_ui', description: 'Display the interactive Todo UI' },
+      { name: 'todo_create', description: 'Create a new todo', parameters: ['title', 'description?'] },
+      { name: 'todo_list', description: 'List all todos', parameters: ['completed?'] },
+      { name: 'todo_update', description: 'Update a todo', parameters: ['id', 'title?', 'description?', 'completed?'] },
+      { name: 'todo_delete', description: 'Delete a todo', parameters: ['id'] },
+    ],
+  });
+});
 
 app.listen(PORT, () => {
   console.log('');

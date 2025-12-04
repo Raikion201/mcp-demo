@@ -1,6 +1,6 @@
-// MCP Client for communicating with the MCP Todo Server using MCP-UI
+// MCP Client for communicating with the MCP Todo Server
 
-const MCP_SERVER_URL = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'http://localhost:3001/mcp';
+const API_BASE_URL = process.env.NEXT_PUBLIC_MCP_SERVER_URL?.replace('/mcp', '') || 'http://localhost:3001';
 
 export interface Todo {
   id: string;
@@ -11,7 +11,7 @@ export interface Todo {
   updatedAt: string;
 }
 
-// Resource type matching MCP SDK's EmbeddedResource['resource']
+// Resource type matching MCP-UI format
 export interface MCPResource {
   uri: string;
   mimeType?: string;
@@ -19,175 +19,98 @@ export interface MCPResource {
   blob?: string;
 }
 
-interface MCPRequest {
-  jsonrpc: '2.0';
-  id: number | string;
-  method: string;
-  params?: Record<string, unknown>;
-}
-
-interface MCPResponse {
-  jsonrpc: '2.0';
-  id: number | string;
-  result?: {
-    content?: Array<{
-      type: string;
-      text?: string;
-      resource?: MCPResource;
-      uri?: string;
-      mimeType?: string;
-      blob?: string;
-    }>;
-    tools?: Array<{
-      name: string;
-      description: string;
-      inputSchema: Record<string, unknown>;
-    }>;
-  };
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
+interface ToolResult {
+  content: Array<{
+    type: string;
+    text?: string;
+    resource?: MCPResource;
+  }>;
 }
 
 class MCPClient {
-  private requestId = 0;
-  private sessionId: string | null = null;
+  private initialized = false;
 
-  private async sendRequest(request: MCPRequest): Promise<MCPResponse> {
+  async initialize(): Promise<void> {
+    // Verify connection by fetching tools list
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (this.sessionId) {
-        headers['mcp-session-id'] = this.sessionId;
-      }
-
-      const response = await fetch(MCP_SERVER_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(request),
-      });
-
-      // Capture session ID from response
-      const newSessionId = response.headers.get('mcp-session-id');
-      if (newSessionId) {
-        this.sessionId = newSessionId;
-      }
-
+      const response = await fetch(`${API_BASE_URL}/api/tools`);
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`Failed to connect: ${response.status}`);
       }
-
-      const data: MCPResponse = await response.json();
-
-      if (data.error) {
-        throw new Error(data.error.message || 'MCP request failed');
-      }
-
-      return data;
+      this.initialized = true;
+      console.log('✅ MCP Client initialized');
     } catch (error) {
-      console.error('MCP request failed:', error);
+      console.error('Failed to initialize MCP client:', error);
       throw error;
     }
   }
 
-  async initialize(): Promise<void> {
-    await this.sendRequest({
-      jsonrpc: '2.0',
-      id: ++this.requestId,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2024-11-05',
-        clientInfo: {
-          name: 'mcp-ui-client',
-          version: '2.0.0',
-        },
-        capabilities: {},
+  private async callTool(toolName: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
+    const response = await fetch(`${API_BASE_URL}/api/tools/${toolName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify(args),
     });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Tool call failed: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  private extractResource(result: ToolResult): MCPResource | undefined {
+    const resourceContent = result.content.find(c => c.type === 'resource');
+    return resourceContent?.resource;
+  }
+
+  private extractText(result: ToolResult): string | undefined {
+    const textContent = result.content.find(c => c.type === 'text');
+    return textContent?.text;
   }
 
   async listTools() {
-    const response = await this.sendRequest({
-      jsonrpc: '2.0',
-      id: ++this.requestId,
-      method: 'tools/list',
-    });
-
-    return response.result?.tools || [];
+    const response = await fetch(`${API_BASE_URL}/api/tools`);
+    const data = await response.json();
+    return data.tools;
   }
 
   async getTodoUI(): Promise<{
     resource: MCPResource;
     textContent?: string;
   }> {
-    const response = await this.sendRequest({
-      jsonrpc: '2.0',
-      id: ++this.requestId,
-      method: 'tools/call',
-      params: {
-        name: 'todo_ui',
-        arguments: {},
-      },
-    });
-
-    const content = response.result?.content || [];
+    const result = await this.callTool('todo_ui');
+    const resource = this.extractResource(result);
     
-    // Find the UI resource in the response
-    const uiContent = content.find(c => c.type === 'resource' && c.resource);
-    const textContent = content.find(c => c.type === 'text')?.text;
-
-    if (uiContent && uiContent.resource) {
-      return {
-        resource: uiContent.resource,
-        textContent,
-      };
+    if (!resource) {
+      throw new Error('No UI resource in response');
     }
 
-    throw new Error('No UI resource in response');
+    return {
+      resource,
+      textContent: this.extractText(result),
+    };
   }
 
   async createTodo(title: string, description?: string): Promise<{
     todo: Todo;
     resource?: MCPResource;
   }> {
-    const response = await this.sendRequest({
-      jsonrpc: '2.0',
-      id: ++this.requestId,
-      method: 'tools/call',
-      params: {
-        name: 'todo_create',
-        arguments: { title, description },
-      },
-    });
-
-    const content = response.result?.content || [];
-    const textContent = content.find(c => c.type === 'text')?.text;
-    const uiContent = content.find(c => c.type === 'resource' && c.resource);
+    const result = await this.callTool('todo_create', { title, description });
+    const textContent = this.extractText(result);
 
     return {
       todo: textContent ? JSON.parse(textContent) : null,
-      resource: uiContent?.resource,
+      resource: this.extractResource(result),
     };
   }
 
   async listTodos(completed?: boolean): Promise<Todo[]> {
-    const response = await this.sendRequest({
-      jsonrpc: '2.0',
-      id: ++this.requestId,
-      method: 'tools/call',
-      params: {
-        name: 'todo_list',
-        arguments: completed !== undefined ? { completed } : {},
-      },
-    });
-
-    const content = response.result?.content || [];
-    const textContent = content.find(c => c.type === 'text')?.text;
-    
+    const result = await this.callTool('todo_list', completed !== undefined ? { completed } : {});
+    const textContent = this.extractText(result);
     return textContent ? JSON.parse(textContent) : [];
   }
 
@@ -198,23 +121,12 @@ class MCPClient {
     todo: Todo;
     resource?: MCPResource;
   }> {
-    const response = await this.sendRequest({
-      jsonrpc: '2.0',
-      id: ++this.requestId,
-      method: 'tools/call',
-      params: {
-        name: 'todo_update',
-        arguments: { id, ...updates },
-      },
-    });
-
-    const content = response.result?.content || [];
-    const textContent = content.find(c => c.type === 'text')?.text;
-    const uiContent = content.find(c => c.type === 'resource' && c.resource);
+    const result = await this.callTool('todo_update', { id, ...updates });
+    const textContent = this.extractText(result);
 
     return {
       todo: textContent ? JSON.parse(textContent) : null,
-      resource: uiContent?.resource,
+      resource: this.extractResource(result),
     };
   }
 
@@ -222,23 +134,12 @@ class MCPClient {
     message: string;
     resource?: MCPResource;
   }> {
-    const response = await this.sendRequest({
-      jsonrpc: '2.0',
-      id: ++this.requestId,
-      method: 'tools/call',
-      params: {
-        name: 'todo_delete',
-        arguments: { id },
-      },
-    });
-
-    const content = response.result?.content || [];
-    const textContent = content.find(c => c.type === 'text')?.text;
-    const uiContent = content.find(c => c.type === 'resource' && c.resource);
+    const result = await this.callTool('todo_delete', { id });
+    const textContent = this.extractText(result);
 
     return {
       message: textContent || 'Deleted',
-      resource: uiContent?.resource,
+      resource: this.extractResource(result),
     };
   }
 }

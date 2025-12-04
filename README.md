@@ -1,169 +1,159 @@
-# MCP-UI Todo Application
+# MCP Todo - Interactive Todo Management with MCP-UI
 
-A modern MCP (Model Context Protocol) Todo application demonstrating **MCP-UI** integration - serving interactive UI components directly from an MCP server.
+A minimal MCP (Model Context Protocol) implementation featuring an interactive Todo application with AI-powered chat interface using DeepSeek AI.
 
-## ✨ Features
+## 🌟 Features
 
-- **MCP-UI Server SDK**: Server generates interactive HTML UI resources using `@mcp-ui/server`
-- **MCP-UI Client SDK**: Client renders UI resources using `UIResourceRenderer` from `@mcp-ui/client`
-- **Streamable HTTP Transport**: Modern MCP transport with session management
-- **Embedded Interactive UI**: Full todo interface served as MCP UIResource
-- **Bi-directional Communication**: UI actions sent via postMessage, handled by host
+- **MCP Server**: Exposes 5 tools (`todo_ui`, `todo_create`, `todo_list`, `todo_update`, `todo_delete`)
+- **AI Chat Interface**: Natural language interaction using Google Gemini with function calling
+- **MCP-UI Integration**: Interactive UI resources rendered directly in the chat
+- **Real-time Updates**: Changes reflect immediately in the embedded UI
 
 ## 📁 Project Structure
 
 ```
-├── mcp-server/          # MCP Backend with MCP-UI
-│   └── src/
-│       ├── http-server.ts   # Streamable HTTP server with UI generation
-│       ├── core/storage.ts  # In-memory todo storage
-│       └── tools/           # Tool implementations
-└── mcp-ui/              # Next.js Frontend with MCP-UI Client
-    └── app/
-        └── page.tsx     # UIResourceRenderer integration
+mcp/
+├── mcp-server/          # MCP Server with todo tools
+│   ├── src/
+│   │   ├── http-server.ts   # Main HTTP/MCP server
+│   │   └── core/storage.ts  # In-memory todo storage
+│   └── package.json
+│
+├── mcp-ui/              # Next.js Chat Interface
+│   ├── app/page.tsx     # Main chat page with Gemini AI
+│   ├── lib/mcp-client.ts # MCP client for tool calls
+│   └── package.json
+│
+└── README.md
 ```
 
 ## 🚀 Quick Start
 
-### 1. Install & Start the MCP Server
+### Prerequisites
+
+- Node.js 18+ 
+- npm or pnpm
+
+### 1. Install Dependencies
+
+```bash
+# Install server dependencies
+cd mcp-server
+npm install
+
+# Install client dependencies
+cd ../mcp-ui
+npm install
+```
+
+### 2. Start the MCP Server
 
 ```bash
 cd mcp-server
-npm install
 npm run dev:http
 ```
 
-Server runs at `http://localhost:3001/mcp`
+The server will start at `http://localhost:3001/mcp`
 
-### 2. Install & Start the UI
+### 3. Start the Chat UI
 
 ```bash
 cd mcp-ui
-npm install
 npm run dev
 ```
 
-UI runs at `http://localhost:3000`
-
-### 3. Connect Cursor to MCP Server (Optional)
-
-Create/edit `C:\Users\<YOUR_USER>\.cursor\mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "todo": {
-      "url": "http://localhost:3001/mcp"
-    }
-  }
-}
-```
-
-Then **reload Cursor** (`Ctrl+Shift+P` → "Developer: Reload Window")
-
-### 4. Test in Cursor Chat
-
-Try these commands:
-
-```
-Show me the todo UI
-Create a todo called "Buy groceries"
-List all my todos
-Mark the todo as completed
-Delete the todo
-```
+The UI will be available at `http://localhost:3000`
 
 ## 🔧 MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `todo_ui` | Display interactive Todo application UI (returns UIResource) |
-| `todo_create` | Create a new todo (returns updated UI) |
-| `todo_list` | List all todos |
-| `todo_update` | Update a todo (returns updated UI) |
-| `todo_delete` | Delete a todo (returns updated UI) |
+| `todo_ui` | Display the interactive Todo application UI |
+| `todo_create` | Create a new todo with title and optional description |
+| `todo_list` | List all todos, optionally filter by completion status |
+| `todo_update` | Update a todo's title, description, or completion status |
+| `todo_delete` | Delete a todo by ID |
 
-## 🎨 MCP-UI Architecture
+## 💬 Chat Examples
 
-### Server Side (`@mcp-ui/server`)
+Try these commands in the chat:
 
-```typescript
-import { createUIResource } from '@mcp-ui/server';
+- "Show me my todos"
+- "Create a todo: Buy groceries"
+- "Add a task to finish the report by Friday"
+- "Show me the todo UI"
+- "Mark all my todos as completed"
 
-const uiResource = createUIResource({
-  uri: 'ui://todo-app/main',
-  content: { type: 'rawHtml', htmlString: htmlContent },
-  encoding: 'text',
-  metadata: {
-    title: 'Todo Application',
-    preferredFrameSize: ['700px', '800px'],
-  },
-});
+## 🔑 Configuration
+
+### Environment Variables
+
+Create `.env.local` in the `mcp-ui` folder:
+
+```env
+# DeepSeek API Key
+NEXT_PUBLIC_DEEPSEEK_API_KEY=your_deepseek_api_key_here
+
+# MCP Server URL  
+NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001/mcp
 ```
 
-### Client Side (`@mcp-ui/client`)
+Get your DeepSeek API key from: https://platform.deepseek.com/
 
-```tsx
-import { UIResourceRenderer } from '@mcp-ui/client';
+## 🏗️ Architecture
 
-<UIResourceRenderer
-  resource={resource}
-  onUIAction={handleUIAction}
-  htmlProps={{
-    autoResizeIframe: true,
-  }}
-/>
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│   Chat UI       │────▶│  Gemini AI      │────▶│  MCP Server     │
+│   (Next.js)     │     │  (Function      │     │  (Express +     │
+│                 │◀────│   Calling)      │◀────│   MCP SDK)      │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+        │                                               │
+        │           ┌─────────────────┐                 │
+        └──────────▶│   MCP-UI        │◀────────────────┘
+                    │   Resource      │
+                    │   Renderer      │
+                    └─────────────────┘
 ```
 
-### Communication Flow
+### Flow
 
-1. Client calls `todo_ui` tool → Server returns UIResource with HTML
-2. Client renders UIResource in sandboxed iframe via `UIResourceRenderer`
-3. User interacts with embedded UI → postMessage sent to parent
-4. Client receives action → calls appropriate MCP tool
-5. Server processes action → returns updated UIResource
-6. Client updates rendered UI
-
-## 📚 Key Concepts
-
-### UIResource Structure
-
-```typescript
-{
-  type: 'resource',
-  resource: {
-    uri: 'ui://todo-app/main',
-    mimeType: 'text/html',
-    text: '<html>...</html>'
-  }
-}
-```
-
-### Intent Messages (UI → Host)
-
-```javascript
-window.parent.postMessage({
-  type: 'intent',
-  payload: {
-    intent: 'todo_create',
-    params: { title: 'New task', description: '...' }
-  }
-}, '*');
-```
+1. User sends message in chat
+2. Gemini AI determines which MCP tool to call
+3. Chat UI calls MCP server with tool parameters
+4. MCP server executes tool and returns UI resource
+5. UI resource is rendered in chat using `UIResourceRenderer`
+6. User can interact with embedded UI (creates, updates, deletes)
+7. Actions are sent back to MCP server
 
 ## 📦 Dependencies
 
 ### Server
 - `@modelcontextprotocol/sdk` - MCP SDK
-- `@mcp-ui/server` - MCP-UI Server SDK
+- `@mcp-ui/server` - UI resource creation
 - `express` - HTTP server
-- `uuid` - ID generation
+- `zod` - Schema validation
 
 ### Client
-- `@mcp-ui/client` - MCP-UI Client SDK
+- `@mcp-ui/client` - UI resource rendering
+- `openai` - OpenAI-compatible SDK (for DeepSeek)
 - `next` - React framework
 - `react` - UI library
 
-## License
+## 🔒 Security Notes
+
+- The Google API key is exposed client-side (NEXT_PUBLIC_*). For production, use a backend proxy
+- MCP server has CORS enabled for development. Restrict in production
+- In-memory storage resets on server restart
+
+## 📝 License
 
 MIT
+
+## 🙏 Acknowledgments
+
+- [MCP-UI](https://github.com/idosal/mcp-ui) by Ido Salomon
+- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [DeepSeek AI](https://deepseek.com/)
